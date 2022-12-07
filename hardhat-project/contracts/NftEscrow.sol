@@ -4,6 +4,7 @@ pragma solidity 0.8.17;
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 contract NftEscrow {
+    // we should use a safe math library for integers and implement in rest of code
 
     uint256 public constant MONTHS_TO_SECONDS_CONVERSION = 30*24*60*60; // keep in mind we are using an epoch of 30 days, not necessarily a month
 
@@ -12,17 +13,14 @@ contract NftEscrow {
         address seller;
         address buyer;
         address nftContractAddress;
-        address tokenId;
+        uint256 tokenId;
         uint256 lockTimeInSeconds;
-        uint256 unlockTime;
+        uint256 unlockTime; // change this variable name to be more descriptive that it's time of last payment 
         uint256 months; // this could also be called epochs, cycles, payment period, etc
         uint256 initialAmount;
         uint256 price;
-        uint256 monthlyPaymentAmount;
         uint256 amountPaid;
         bool hasBuyer;
-        bool completed;
-        bool paidOff;
     }
 
     Listing[] public listings;
@@ -45,17 +43,23 @@ contract NftEscrow {
         require(IERC721(_nftContractAddress).ownerOf(_tokenId) == msg.sender, "you are not the owner of this nft");
         require(IERC721(_nftContractAddress).getApproved(_tokenId) == address(this), "this address has not been approved by seller");
         //require deposit amount < listing price??
+        // require months less than some amount of time?
+
+        uint256 lockTimeInSeconds = _months*MONTHS_TO_SECONDS_CONVERSION;
 
         Listing memory listing = Listing({
+            isActive: false,
             seller: msg.sender,
+            buyer: address(0),
             nftContractAddress: _nftContractAddress,
             tokenId: _tokenId,
             months: _months,
             price: _price,
-            initialAmount: _initialAmount
-            // lockTimeInSeconds = months*30*24*60*60; // create a constant for this conversion 
-            // unlockTime = block.timestamp + lockTimeInSeconds;
-            // monthlyPaymentAmount = price/months; // fix rounding error - just + 1?
+            initialAmount: _initialAmount,
+            lockTimeInSeconds: lockTimeInSeconds, // create a constant for this conversion 
+            unlockTime: block.timestamp + lockTimeInSeconds,
+            amountPaid: 0,
+            hasBuyer: false
         });
 
         listings.push(listing);
@@ -71,9 +75,8 @@ contract NftEscrow {
         Listing storage listing = listings[_listingIndex];
         // should we require listing exits here to be safe? It should throw an error if the index is larger than length of listings array
         
-        require(!listing.completed, "this listing is no longer available");
-        require(listing.isActive, "this listing is currently inactive");
-        require(!listing.hasBuyer, "There is already a buyer for this listing");
+        require(listing.isActive, "this listing is not available");
+        require(!listing.hasBuyer, "There is already a buyer for this listing"); // might change this to check if the address is equal to zero address, and take this field out of struct
         require(msg.value >= listing.initialAmount, "Did not send enough for the deposit");
 
         /** below, and in createListing function, is there a way to declare the interface then call from it? rather than wrapping an address every time?
@@ -83,7 +86,7 @@ contract NftEscrow {
          * is it like this?: IERC721 nftContact = IERC721(listing.address)
          */
         require(IERC721(listing.nftContractAddress).ownerOf(listing.tokenId) == listing.seller, "seller is no longer the owner of this nft");
-        require(IERC721(listing.nftContractAddress).getApproved() == address(this), "this address has not been approved by seller");
+        require(IERC721(listing.nftContractAddress).getApproved(listing.tokenId) == address(this), "this address has not been approved by seller");
 
         IERC721(listing.nftContractAddress).safeTransferFrom(listing.seller, address(this), listing.tokenId);
         require(IERC721(listing.nftContractAddress).ownerOf(listing.tokenId) == address(this), "could not transfer nft from owner");
@@ -125,6 +128,11 @@ contract NftEscrow {
 
     }
 
+    function getMonthlyPaymentAmount(uint256 _listingIndex) public view returns (uint256){
+        Listing memory listing = listings[_listingIndex];
+        return (listing.price/listing.months + 1); // fix rounding error by adding 1. so this will be a small additional cost to the buy. consider if any vulnerabilities here
+    }
+
     // @dev called by seller
     function cancelListing(uint256 _listingIndex) public {
         Listing storage listing = listings[_listingIndex];
@@ -141,10 +149,13 @@ contract NftEscrow {
 
 // called by seller 
     function reActivateListing(uint256 _listingIndex) public {
+        //require seller is owner, and any other requirements used in create listing. this is to allow the deletion of the "paidOff" field in struct. will need to reorganize around "isActive" field
+        // ^^ consider security risks
+        // this function is essentially so a seller can save gas by not having to create a new listing if there is a default. may be unnecessary  
         Listing storage listing = listings[_listingIndex];
         require(listing.seller == msg.sender);
-        require(!listing.active);
-        listing.active == true;
+        require(!listing.isActive);
+        listing.isActive == true;
     } 
 
 
